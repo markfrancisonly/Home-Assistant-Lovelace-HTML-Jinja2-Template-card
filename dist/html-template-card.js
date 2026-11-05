@@ -7,36 +7,16 @@ class HtmlTemplateCard extends HTMLElement {
     }
 
     set hass(hass) {
-        const oldHass = this._hass;
         this._hass = hass;
-        if (this._config && this._hass && !this._entities) {
-            this.calculateEntites();
-        }
-        if (this.shouldUpdate(oldHass)) {
-            this.processAndRender();
-        }
-    }
-
-    shouldUpdate(oldHass) {
-        if (oldHass && this._entities && !this._config.always_update) {
-            let should = false;
-            this._entities.forEach(entity => {
-                should = should || oldHass.states[entity] !== this._hass.states[entity]
-                    || oldHass.states[entity].attributes !== this._hass.states[entity].attributes
-            });
-            return should;
-        }
-        return true;
+        this._subscribe();
     }
 
     setConfig(config) {
         if (!config.content) {
             throw new Error("You need to define 'content' in your configuration.")
         }
+        this._unsubscribe();
         this._config = config;
-        if (this._config && this._hass && !this._entities) {
-            this.calculateEntites();
-        }
         if (!this._config.picture_elements_mode) {
             let haCard = document.createElement("ha-card");
             haCard.style.padding = "16px";
@@ -44,37 +24,47 @@ class HtmlTemplateCard extends HTMLElement {
         } else {
             this._rootElement = document.createElement("div");
         }
+        this._subscribe();
     }
 
-    calculateEntites() {
-        this._entities = [];
-        if (this._config.entities && Array.isArray(this._config.entities)) {
-            for (const entity in this._config.entities) {
-                this._entities.push(this._config.entities[entity]);
-            }
-        }
-        for (const entity in this._hass.states) {
-            if (this._config.content.includes(entity)) {
-                this._entities.push(this._hass.states[entity].entity_id);
-            }
-        }
+    connectedCallback() {
+        this._subscribe();
     }
 
-    processAndRender() {
+    disconnectedCallback() {
+        this._unsubscribe();
+    }
+
+    // One render_template subscription per card: Home Assistant re-renders it whenever
+    // the entities the template reads change, so hass updates need no handling here.
+    _subscribe() {
+        if (this._subscription || this._rendered || !this._config || !this._hass || !this.isConnected) {
+            return;
+        }
         let content = this._config.content;
         if (!this._config.ignore_line_breaks) {
             content = content.replace(/\r?\n|\r/g, "</br>");
         }
-        if (!this._config.do_not_parse) {
-            this._hass.connection.subscribeMessage(
+        if (this._config.do_not_parse) {
+            this._rendered = true;
+            this.render(content);
+        } else {
+            this._subscription = this._hass.connection.subscribeMessage(
                 (msg) => this.render(msg.result),
                 {type: "render_template", template: content}
             );
-        } else {
-            this.render(content);
         }
         if (!(this._rootElement in this.children)) {
             this.appendChild(this._rootElement);
+        }
+    }
+
+    _unsubscribe() {
+        this._rendered = false;
+        if (this._subscription) {
+            const subscription = this._subscription;
+            this._subscription = undefined;
+            subscription.then((unsubscribe) => unsubscribe()).catch(() => {});
         }
     }
 
